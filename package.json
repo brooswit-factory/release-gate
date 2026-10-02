@@ -1,0 +1,10 @@
+{
+  "name": "release-gate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "check": "bun run scripts/release/check.ts"
+  }
+}

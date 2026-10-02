@@ -1,0 +1,83 @@
+name: release gate
+
+on:
+  workflow_call:
+    inputs:
+      gated-paths:
+        description: >-
+          JSON array of regex strings. A changed file matching any of them
+          requires a new changelog.d/*.md fragment.
+        type: string
+        default: '["^src/", "^schema/", "^package\\.json$"]'
+        required: false
+      version-file:
+        description: >-
+          Path to the file the released version is read from. Supported:
+          package.json ("version"), gradle.properties ("version="),
+          pack.toml ("version ="), release.json ("tag").
+        type: string
+        default: 'package.json'
+        required: false
+      surface-patterns:
+        description: >-
+          Optional JSON array of regex strings. Matches found within files
+          under gated-paths are diffed against the base branch: a match that
+          disappears requires bump: major, one that appears requires at
+          least bump: minor. Empty array (the default) disables this check.
+        type: string
+        default: '[]'
+        required: false
+      base-branch:
+        description: 'Branch to compare against when not running on a pull_request (e.g. a push to a feature branch).'
+        type: string
+        default: 'main'
+        required: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # release-gate's own CI calls this workflow on itself (see .github/workflows/ci.yml)
+      # to self-test; in that case the scripts above are already the ones to run, and
+      # fetching a `v1` tag that may not exist yet (e.g. during the PR that becomes v1)
+      # would break that self-test. Every other caller has no scripts/release/ of its own
+      # — "scripts are NOT copied into each repo" — so it fetches the pinned release line.
+      - name: checkout release-gate scripts (external consumers only)
+        if: github.repository != 'brooswit-factory/release-gate'
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-factory/release-gate
+          # Pinned to this workflow's own release line so a consumer pinning
+          # `@v1` always gets the scripts that shipped with that v1 tag, not
+          # whatever is newest on main. Bump this alongside the next major
+          # tag's own gate.yml when one is cut.
+          ref: v1
+          path: .release-gate
+
+      - name: locate release-gate scripts
+        id: locate
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$CALLER_REPOSITORY" = "brooswit-factory/release-gate" ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=.release-gate" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: release gate
+        env:
+          RELEASE_BASE: origin/${{ github.base_ref || inputs.base-branch }}
+          RELEASE_VERSION_FILE: ${{ inputs.version-file }}
+          RELEASE_GATED_PATHS: ${{ inputs.gated-paths }}
+          RELEASE_SURFACE_PATTERNS: ${{ inputs.surface-patterns }}
+        run: bun run ${{ steps.locate.outputs.dir }}/scripts/release/check.ts
